@@ -1,9 +1,9 @@
-Hugo Module based template repository for the [Ananke theme](https://github.com/theNewDynamic/gohugo-theme-ananke) for [GoHugo](https://gohugo.io/).
+Hugo Module based template repository for the [Ananke theme](https://github.com/gohugo-ananke/ananke) for [GoHugo](https://gohugo.io/).
 
 ## Versions
 
-- **[Install Ananke as GoHugo Module](https://github.com/davidsneighbour/gohugo-theme-ananke-template-mod) - this repository**
-- [Install Ananke as Git Submodule](https://github.com/davidsneighbour/gohugo-theme-ananke-template-submod)
+- **[Install Ananke as GoHugo Module](https://github.com/gohugo-ananke/template-hugo-mod) - this repository**
+- [Install Ananke as Git Submodule](https://github.com/gohugo-ananke/template-git-submod)
 
 ## Requirements
 
@@ -55,7 +55,7 @@ Add the Ananke theme as a Hugo Module:
 disable = false
 ignoreConfig = false
 ignoreImports = false
-path = 'github.com/theNewDynamic/gohugo-theme-ananke/v2'
+path = 'github.com/gohugo-ananke/ananke/v2'
 ```
 
 Note: Hugo configuration can have various formats and locations. The previous lines are written in the `hugo.toml` or `config.toml` file at the root of the project. If you have a different configuration file or format it could be that you need to add the module configuration in a different way.
@@ -79,4 +79,4 @@ hugo server
 
 Running this command will start the development server and you can see your website at <http://localhost:1313/>. To stop the development server press `Ctrl + C`.
 
-So set up details like comment system follow the steps in the [Ananke theme's getting started guide](https://github.com/theNewDynamic/gohugo-theme-ananke#getting-started).
+So set up details like comment system follow the steps in the [Ananke theme's getting started guide](https://github.com/gohugo-ananke/ananke#getting-started).

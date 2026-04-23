@@ -1,7 +1,5 @@
-module github.com/davidsneighbour/gohugo-theme-ananke-template-mod
+module github.com/gohugo-ananke/template-hugo-mod
 
-go 1.22
+go 1.25
 
-toolchain go1.24.0
-
-require github.com/theNewDynamic/gohugo-theme-ananke/v2 v2.12.2-0.20251128064442-a4c2f7d07d0b // indirect
+require github.com/gohugo-ananke/ananke/v2 v2.13.0-prerelease.1.0.20260423232020-45cc10e7bbf1 // indirect
