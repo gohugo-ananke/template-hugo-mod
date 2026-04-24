@@ -1,2 +1,2 @@
-github.com/gohugo-ananke/ananke/v2 v2.13.0-prerelease.1.0.20260423232020-45cc10e7bbf1 h1:3RH+BLI9soSDV84yA/iv5NLFyFq9paFtI3eiUkd/biI=
-github.com/gohugo-ananke/ananke/v2 v2.13.0-prerelease.1.0.20260423232020-45cc10e7bbf1/go.mod h1:HLy3O8WIkY0EmkMryllP6ilZVvAWz1XsLnfYLuD7dvE=
+github.com/gohugo-ananke/ananke/v2 v2.13.0 h1:V/cUloKhL5aIqkmS10fDpCOMg+W8XMgDbX0qIewS0KQ=
+github.com/gohugo-ananke/ananke/v2 v2.13.0/go.mod h1:HLy3O8WIkY0EmkMryllP6ilZVvAWz1XsLnfYLuD7dvE=
