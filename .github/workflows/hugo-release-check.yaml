@@ -1,0 +1,447 @@
+name: Hugo latest build watch
+
+# This workflow monitors the latest Hugo release and runs a build with it to
+# detect potential compatibility issues early. It is triggered on a schedule and
+# can also be triggered manually.
+#
+# This workflow is Hugo-module specific. It updates the configured Ananke Hugo
+# module to the latest available version before running Hugo.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily at 03:20 UTC / 10:20 UTC+7.
+    - cron: "20 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hugo-latest-build-watch-module
+  cancel-in-progress: false
+
+env:
+  TARGET_ISSUE_REPOSITORY: gohugo-ananke/ananke
+  ISSUE_LABELS: status:blocked,prio:critical
+  ISSUE_ASSIGNEES: davidsneighbour
+
+  HUGO_EXTENDED: "false"
+  HUGO_BUILD_COMMAND: hugo --printI18nWarnings --printPathWarnings --printUnusedTemplates
+
+  ANANKE_MODULE_PATH: github.com/gohugo-ananke/ananke/v2
+  ANANKE_MODULE_VERSION: latest
+
+jobs:
+  check-latest-hugo:
+    name: Check latest Hugo build with Hugo Module
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Detect latest Hugo release
+        id: hugo
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HUGO_EXTENDED: ${{ env.HUGO_EXTENDED }}
+        run: |
+          set -Eeuo pipefail
+
+          latest_json="$(gh api repos/gohugoio/hugo/releases/latest)"
+          version="$(jq -r '.tag_name' <<< "${latest_json}")"
+
+          if [[ -z "${version}" || "${version}" == "null" ]]; then
+            echo "::error::Could not detect latest Hugo release."
+            exit 1
+          fi
+
+          arch="linux-amd64"
+
+          if [[ "${HUGO_EXTENDED}" == "true" ]]; then
+            asset_pattern="hugo_extended_${version#v}_${arch}.tar.gz"
+          else
+            asset_pattern="hugo_${version#v}_${arch}.tar.gz"
+          fi
+
+          asset_url="$(
+            jq -r --arg asset_pattern "${asset_pattern}" '
+              .assets[]
+              | select(.name == $asset_pattern)
+              | .browser_download_url
+            ' <<< "${latest_json}"
+          )"
+
+          if [[ -z "${asset_url}" || "${asset_url}" == "null" ]]; then
+            echo "::error::Could not find Hugo asset: ${asset_pattern}"
+            exit 1
+          fi
+
+          release_url="https://github.com/gohugoio/hugo/releases/tag/${version}"
+
+          {
+            echo "version=${version}"
+            echo "asset_url=${asset_url}"
+            echo "release_url=${release_url}"
+            echo "cache_key=hugo-build-tested-module-${version}"
+          } >> "${GITHUB_OUTPUT}"
+
+          echo "Latest Hugo release: ${version}"
+          echo "Asset: ${asset_url}"
+          echo "Release notes: ${release_url}"
+
+      - name: Check whether this Hugo version was already tested
+        id: tested-cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .github/.cache/hugo-latest-build-watch-module
+          key: ${{ steps.hugo.outputs.cache_key }}
+          lookup-only: true
+
+      - name: Skip unchanged Hugo version
+        if: steps.tested-cache.outputs.cache-hit == 'true' && github.event_name != 'workflow_dispatch'
+        shell: bash
+        run: |
+          echo "Hugo ${{ steps.hugo.outputs.version }} was already tested successfully for the Hugo Module build. Nothing to do."
+
+      - name: Configure runtime cache paths
+        if: steps.tested-cache.outputs.cache-hit != 'true' || github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          {
+            echo "HUGO_CACHEDIR=${RUNNER_TEMP}/hugo-cache-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "GOPATH=${RUNNER_TEMP}/go-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "GOMODCACHE=${RUNNER_TEMP}/go-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/pkg/mod"
+          } >> "${GITHUB_ENV}"
+
+      - name: Prepare Hugo
+        if: steps.tested-cache.outputs.cache-hit != 'true' || github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          mkdir -p "${RUNNER_TEMP}/hugo"
+
+          curl --fail --location --silent --show-error \
+            --output "${RUNNER_TEMP}/hugo/hugo.tar.gz" \
+            "${{ steps.hugo.outputs.asset_url }}"
+
+          tar -xzf "${RUNNER_TEMP}/hugo/hugo.tar.gz" -C "${RUNNER_TEMP}/hugo"
+          chmod +x "${RUNNER_TEMP}/hugo/hugo"
+
+          {
+            echo "${RUNNER_TEMP}/hugo"
+          } >> "${GITHUB_PATH}"
+
+      - name: Verify Hugo executable
+        if: steps.tested-cache.outputs.cache-hit != 'true' || github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if ! command -v hugo > /dev/null 2>&1; then
+            echo "::error::Hugo executable was not found on PATH."
+            exit 1
+          fi
+
+          hugo version
+
+      - name: Verify Go executable
+        if: steps.tested-cache.outputs.cache-hit != 'true' || github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if ! command -v go > /dev/null 2>&1; then
+            echo "::error::Go executable was not found on PATH. Hugo Modules require Go."
+            exit 1
+          fi
+
+          go version
+
+      - name: Prepare isolated Hugo module cache
+        if: steps.tested-cache.outputs.cache-hit != 'true' || github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "Preparing isolated Hugo and Go module cache paths."
+          mkdir -p "${HUGO_CACHEDIR}" "${GOMODCACHE}"
+
+      - name: Update Ananke Hugo Module
+        id: ananke
+        if: steps.tested-cache.outputs.cache-hit != 'true' || github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          ANANKE_MODULE_PATH: ${{ env.ANANKE_MODULE_PATH }}
+          ANANKE_MODULE_VERSION: ${{ env.ANANKE_MODULE_VERSION }}
+        run: |
+          set -Eeuo pipefail
+
+          if [[ ! -f "go.mod" ]]; then
+            echo "::error::No go.mod file found. This workflow is for the Hugo Module implementation."
+            exit 1
+          fi
+
+          if [[ -z "${ANANKE_MODULE_PATH}" ]]; then
+            echo "::error::ANANKE_MODULE_PATH is empty."
+            exit 1
+          fi
+
+          if [[ -z "${ANANKE_MODULE_VERSION}" ]]; then
+            echo "::error::ANANKE_MODULE_VERSION is empty."
+            exit 1
+          fi
+
+          if ! grep -Eq "^[[:space:]]*${ANANKE_MODULE_PATH//\//\\/}[[:space:]]+" go.mod; then
+            echo "::warning file=go.mod::go.mod does not currently require ${ANANKE_MODULE_PATH}. The workflow will still attempt to resolve it with Hugo Modules."
+          fi
+
+          before_version="$(
+            go list -m -f '{{.Version}}' "${ANANKE_MODULE_PATH}" 2>/dev/null || true
+          )"
+
+          echo "Ananke module before update: ${before_version:-<not resolved>}"
+
+          echo "Cleaning Hugo module cache metadata."
+          hugo mod clean --all || true
+
+          echo "Updating Ananke Hugo Module."
+          hugo mod get "${ANANKE_MODULE_PATH}@${ANANKE_MODULE_VERSION}"
+
+          echo "Tidying Hugo modules."
+          hugo mod tidy
+
+          resolved_version="$(
+            go list -m -f '{{.Version}}' "${ANANKE_MODULE_PATH}"
+          )"
+
+          if [[ -z "${resolved_version}" ]]; then
+            echo "::error::Could not resolve ${ANANKE_MODULE_PATH} after update."
+            exit 1
+          fi
+
+          module_release_url="https://github.com/gohugo-ananke/ananke/releases/tag/${resolved_version}"
+
+          {
+            echo "ananke_module_path=${ANANKE_MODULE_PATH}"
+            echo "ananke_module_requested_version=${ANANKE_MODULE_VERSION}"
+            echo "ananke_module_before_version=${before_version}"
+            echo "ananke_module_resolved_version=${resolved_version}"
+            echo "ananke_module_release_url=${module_release_url}"
+          } >> "${GITHUB_OUTPUT}"
+
+          echo "Resolved Ananke Hugo Module:"
+          echo "- Path: ${ANANKE_MODULE_PATH}"
+          echo "- Before: ${before_version:-<not resolved>}"
+          echo "- Requested: ${ANANKE_MODULE_VERSION}"
+          echo "- Resolved: ${resolved_version}"
+
+          echo
+          echo "Resolved Hugo module graph:"
+          hugo mod graph || true
+
+      - name: Run Hugo build and capture output
+        id: build
+        if: steps.tested-cache.outputs.cache-hit != 'true' || github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          HUGO_BUILD_COMMAND: ${{ env.HUGO_BUILD_COMMAND }}
+        run: |
+          set +e
+
+          mkdir -p .github/.cache/hugo-latest-build-watch-module
+
+          log_file="${RUNNER_TEMP}/hugo-build-output.log"
+          exit_code_file="${RUNNER_TEMP}/hugo-build-exit-code.txt"
+
+          {
+            echo "Repository: ${GITHUB_REPOSITORY}"
+            echo "Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "Hugo version: ${{ steps.hugo.outputs.version }}"
+            echo "Theme mode: Hugo Module"
+            echo "Ananke module path: ${{ steps.ananke.outputs.ananke_module_path }}"
+            echo "Ananke module requested version: ${{ steps.ananke.outputs.ananke_module_requested_version }}"
+            echo "Ananke module previous version: ${{ steps.ananke.outputs.ananke_module_before_version }}"
+            echo "Ananke module resolved version: ${{ steps.ananke.outputs.ananke_module_resolved_version }}"
+            echo "Command: ${HUGO_BUILD_COMMAND}"
+            echo
+            echo "----- hugo output -----"
+
+            bash -lc "${HUGO_BUILD_COMMAND}"
+            hugo_exit_code="$?"
+
+            echo "${hugo_exit_code}" > "${exit_code_file}"
+
+            echo "----- end hugo output -----"
+          } 2>&1 | tee "${log_file}"
+
+          tee_exit_code="${PIPESTATUS[1]}"
+
+          if [[ "${tee_exit_code}" -ne 0 ]]; then
+            echo "::error::Failed to write Hugo build output log."
+            exit "${tee_exit_code}"
+          fi
+
+          if [[ ! -f "${exit_code_file}" ]]; then
+            echo "::error::Hugo command did not run to completion. No exit code was captured."
+            exit 1
+          fi
+
+          exit_code="$(cat "${exit_code_file}")"
+
+          if grep -Eiq '(^|[^[:alpha:]])(error|warning|warn|failed|fatal)([^[:alpha:]]|$)' "${log_file}"; then
+            has_problems="true"
+          else
+            has_problems="false"
+          fi
+
+          {
+            echo "exit_code=${exit_code}"
+            echo "has_problems=${has_problems}"
+            echo "log_file=${log_file}"
+          } >> "${GITHUB_OUTPUT}"
+
+          cp "${log_file}" .github/.cache/hugo-latest-build-watch-module/last-output.log
+          printf '%s\n' "${{ steps.hugo.outputs.version }}" > .github/.cache/hugo-latest-build-watch-module/version.txt
+
+          # Non-zero Hugo exits are reportable findings, not workflow failures.
+          exit 0
+
+      - name: Create or update compatibility issue
+        if: steps.build.outputs.has_problems == 'true' || steps.build.outputs.exit_code != '0'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.ANANKE_ISSUE_TOKEN }}
+          TARGET_ISSUE_REPOSITORY: ${{ env.TARGET_ISSUE_REPOSITORY }}
+          ISSUE_LABELS: ${{ env.ISSUE_LABELS }}
+          ISSUE_ASSIGNEES: ${{ env.ISSUE_ASSIGNEES }}
+
+          HUGO_VERSION: ${{ steps.hugo.outputs.version }}
+          HUGO_RELEASE_URL: ${{ steps.hugo.outputs.release_url }}
+
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          THEME_MODE: Hugo Module
+          ANANKE_MODULE_PATH: ${{ steps.ananke.outputs.ananke_module_path }}
+          ANANKE_MODULE_REQUESTED_VERSION: ${{ steps.ananke.outputs.ananke_module_requested_version }}
+          ANANKE_MODULE_BEFORE_VERSION: ${{ steps.ananke.outputs.ananke_module_before_version }}
+          ANANKE_MODULE_RESOLVED_VERSION: ${{ steps.ananke.outputs.ananke_module_resolved_version }}
+          ANANKE_MODULE_RELEASE_URL: ${{ steps.ananke.outputs.ananke_module_release_url }}
+
+          EXIT_CODE: ${{ steps.build.outputs.exit_code }}
+          LOG_FILE: ${{ steps.build.outputs.log_file }}
+        run: |
+          set -Eeuo pipefail
+
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::error::Missing secret ANANKE_ISSUE_TOKEN. This must be a fine-grained token with issue write access to ${TARGET_ISSUE_REPOSITORY}."
+            exit 1
+          fi
+
+          repo_name="${SOURCE_REPOSITORY##*/}"
+          title="failure: module build with ${HUGO_VERSION} at ${repo_name}"
+          body_file="${RUNNER_TEMP}/hugo-build-issue.md"
+
+          {
+            echo "Hugo Module build problems were detected in [\`${SOURCE_REPOSITORY}\`](${SOURCE_REPOSITORY_URL})."
+            echo
+            echo "- Hugo version: [\`${HUGO_VERSION}\`](${HUGO_RELEASE_URL})"
+            echo "- Source repository: [\`${SOURCE_REPOSITORY}\`](${SOURCE_REPOSITORY_URL})"
+            echo "- Theme mode: \`${THEME_MODE}\`"
+            echo "- Ananke module path: \`${ANANKE_MODULE_PATH}\`"
+            echo "- Ananke module requested version: \`${ANANKE_MODULE_REQUESTED_VERSION}\`"
+            echo "- Ananke module previous version: \`${ANANKE_MODULE_BEFORE_VERSION:-<not resolved>}\`"
+            echo "- Ananke module resolved version: [\`${ANANKE_MODULE_RESOLVED_VERSION}\`](${ANANKE_MODULE_RELEASE_URL})"
+            echo "- Exit code: \`${EXIT_CODE}\`"
+            echo "- Workflow run: ${WORKFLOW_RUN_URL}"
+            echo
+            echo "## Full CLI output"
+            echo
+            echo '```text'
+            cat "${LOG_FILE}"
+            echo '```'
+          } > "${body_file}"
+
+          existing_issue_number="$(
+            gh issue list \
+              --repo "${TARGET_ISSUE_REPOSITORY}" \
+              --state open \
+              --search "${title} in:title" \
+              --json number,title \
+              --jq ".[] | select(.title == \"${title}\") | .number" \
+              | head -n 1
+          )"
+
+          label_args=()
+
+          if [[ -n "${ISSUE_LABELS}" ]]; then
+            label_args=(--label "${ISSUE_LABELS}")
+          fi
+
+          create_assignee_args=()
+          edit_assignee_args=()
+
+          if [[ -n "${ISSUE_ASSIGNEES}" ]]; then
+            clean_assignees="$(
+              printf '%s' "${ISSUE_ASSIGNEES}" \
+                | tr ',' '\n' \
+                | sed 's/^@//' \
+                | sed 's/^[[:space:]]*//' \
+                | sed 's/[[:space:]]*$//' \
+                | paste -sd ',' -
+            )"
+
+            create_assignee_args=(--assignee "${clean_assignees}")
+            edit_assignee_args=(--add-assignee "${clean_assignees}")
+          fi
+
+          if [[ -n "${existing_issue_number}" ]]; then
+            edit_args=(
+              issue edit "${existing_issue_number}"
+              --repo "${TARGET_ISSUE_REPOSITORY}"
+              --body-file "${body_file}"
+            )
+
+            if [[ -n "${ISSUE_LABELS}" ]]; then
+              edit_args+=(--add-label "${ISSUE_LABELS}")
+            fi
+
+            if [[ "${#edit_assignee_args[@]}" -gt 0 ]]; then
+              edit_args+=("${edit_assignee_args[@]}")
+            fi
+
+            gh "${edit_args[@]}"
+          else
+            gh issue create \
+              --repo "${TARGET_ISSUE_REPOSITORY}" \
+              --title "${title}" \
+              --body-file "${body_file}" \
+              "${label_args[@]}" \
+              "${create_assignee_args[@]}"
+          fi
+
+      - name: Report successful watchdog result
+        if: steps.build.outputs.has_problems == 'true' || steps.build.outputs.exit_code != '0'
+        shell: bash
+        run: |
+          echo "Hugo Module build problems were detected and reported successfully."
+          echo "Keeping workflow green because reporting is the purpose of this workflow."
+
+      - name: Mark Hugo version as tested
+        if: >-
+          (steps.tested-cache.outputs.cache-hit != 'true' || github.event_name == 'workflow_dispatch') &&
+          steps.build.outputs.has_problems != 'true' &&
+          steps.build.outputs.exit_code == '0'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .github/.cache/hugo-latest-build-watch-module
+          key: ${{ steps.hugo.outputs.cache_key }}
