@@ -4,7 +4,7 @@
   "description": "Hugo Module based template repository for the [Ananke theme](https://github.com/gohugo-ananke/ananke) for [GoHugo](https://gohugo.io/).",
   "main": "index.js",
   "scripts": {
-    "update": "hugo mod get -u ./... && hugo mod tidy && git add go.mod go.sum && git commit -m 'build(deps): update go module'",
+    "update": "hugo mod get -u ./... && hugo mod tidy",
     "server": "hugo server --logLevel debug --templateMetrics --templateMetricsHints"
   },
   "repository": {
