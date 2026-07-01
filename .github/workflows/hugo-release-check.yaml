@@ -441,7 +441,7 @@ jobs:
           (steps.tested-cache.outputs.cache-hit != 'true' || github.event_name == 'workflow_dispatch') &&
           steps.build.outputs.has_problems != 'true' &&
           steps.build.outputs.exit_code == '0'
-        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .github/.cache/hugo-latest-build-watch-module
           key: ${{ steps.hugo.outputs.cache_key }}
